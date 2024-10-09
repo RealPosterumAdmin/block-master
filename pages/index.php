@@ -141,21 +141,21 @@
                     lineNumbers: true,
                     mode: "htmlmixed",
                     theme: "material",
-                    value: "<!DOCTYPE html>\n<html>\n<head>\n    <title>My Page</title>\n</head>\n<body>\n    <?php echo 'Hello, World!'; ?>\n</body>\n</html>"
+                    value: ''
                 });
 
                 css = CodeMirror(document.getElementById("css"), {
                     lineNumbers: true,
                     mode: "css",
                     theme: "material",
-                    value: 'body {font-family: Arial, sans-serif;margin: 0;display: flex;height: 100vh;}'
+                    value: ''
                 });
 
                 js = CodeMirror(document.getElementById("js"), {
                     lineNumbers: true,
                     mode: "javascript",
                     theme: "material",
-                    value: "jQuery(document).ready(function($) {$('.color-picker').wpColorPicker();});"
+                    value: ""
                 });
             }
 

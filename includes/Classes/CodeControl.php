@@ -12,6 +12,8 @@ class CodeControl
 {
     public $resultJS;
     public $analiz=[];
+    public $blocks=[];
+    public $orderedBlocks=[];
     public function __construct($blockName,$html)
     {
         $this->resultJS = <<<JS
@@ -20,6 +22,7 @@ const { useBlockProps, RichText, MediaUpload, MediaUploadCheck, InspectorControl
 const { PanelBody, Button, SelectControl, TextControl } = wp.components;
 const { useState, useEffect } = wp.element;
 const apiFetch = wp.apiFetch;
+
 
 const fetchOptions = async () => {
     try {
@@ -47,45 +50,86 @@ JS;
         $blockName =  strtolower(str_replace(' ', '-', trim($blockName)));
 
         $this->createBlockData($blockName, $html);
+
+        $blocks = $this->blocks;
+        $blocksCount = count($blocks);
+        $parentBlock = $blocks[$blocksCount-1];
+        $this->orderedBlocks[] = $parentBlock;
+        unset($this->blocks[$blocksCount-1]);
+        $this->findChilds($parentBlock['name']);
+        foreach ($this->orderedBlocks as $block){
+            $this->resultJS .= $block['code'];
+        }
     }
 
-    function createBlockData($name, $html, $parentName = '')
-    {   //var_dump('Create Block: Name:'.$name);
-        //var_dump('Create Block: parentName:'.$parentName);
-        
-        // //var_dump($name);
+    private function createBlockData($name, $html, $parentName = '') {
         $this->analiz['blockName'] = $name;
         $blockChilds = $this->findInnerBlock($html);
 
         $this->analiz['blockChild'] = $blockChilds;
-        // //var_dump($blockChilds);
-        if (empty($blockChilds))
-        {
-            //var_dump('Create Block: no childs');
-            $blockJS = $this->findAtt($name, $html, $parentName );
-        }else{
-            //var_dump('Create Block: With Child');
+
+        if (empty($blockChilds)) {
+            $blockJS = $this->findAtt($name, $html, $parentName);
+        } else {
             for ($i = count($blockChilds) - 1; $i >= 0; $i--) {
                 $childStart = $blockChilds[$i]['startPos'];
                 $childEnd = $blockChilds[$i]['endPos'];
                 $childContent = $blockChilds[$i]['content'];
-                $childName = $name . '-' . $i;
+                $childName = $name . '-' . ($i + 1);
+
+                // Markaziy blokni yaratish
+                $centralBlockName = "{$childName}-central";
                 $innerTag = <<<JS
 <InnerBlocks
-    allowedBlocks={['block-master/$childName']}
-    template={[
-        ['block-master/$childName', {}],
-    ]}/>
+    allowedBlocks={['block-master/{$centralBlockName}']}
+    template={[['block-master/{$centralBlockName}', {}]]}
+    templateLock="all"
+/>
 JS;
+
+                // Markaziy blokni ro'yxatdan o'tkazish
+                $centralBlockJS = sprintf("
+registerBlockType('block-master/%s', {
+    title: '%s',
+    category: 'block-master',
+    parent: ['block-master/{$name}'],
+    attributes: {},
+    edit: ({ attributes, setAttributes }) => {
+        return (
+               <InnerBlocks
+                   allowedBlocks={['block-master/{$childName}']}
+                   template={[['block-master/{$childName}', {}],]}
+               />
+        );
+    },
+    save: () => {
+        return (
+                <InnerBlocks.Content />
+        );
+    }
+});", strtolower($centralBlockName), ucfirst($centralBlockName));
+                $this->blocks[] = [
+                    'name' => $centralBlockName,
+                    'parent' => $name,
+                    'code' => $centralBlockJS
+                ];
+
+                // HTML ni markaziy blok bilan almashtirish
                 $html = substr_replace($html, $innerTag, $childStart, $childEnd - $childStart);
-                $this->createBlockData($childName, $childContent, $name);
+
+                // Ichki bloklar uchun qayta chaqirish
+                $this->createBlockData($childName, $childContent, $centralBlockName);
             }
+
             $blockJS = $this->findAtt($name, $html, $parentName);
         }
-        
-        $this->resultJS .= $blockJS;
+        $this->blocks[] = [
+            'name' => $name,
+            'parent' => $parentName,
+            'code' => $blockJS
+        ];
     }
-    function findInnerBlock($html)
+    private function findInnerBlock($html)
     {
         $blocks = [];
         if (!is_string($html) || empty($html)) {
@@ -128,7 +172,7 @@ JS;
         }
         return $blocks;
     }
-    function replaceInnerBlocksWithContent($html) {
+    private function replaceInnerBlocksWithContent($html) {
             // Yaxshilangan regex andozasi
         $pattern = '/<InnerBlocks\b[^>]*?\s*\/>/';
 
@@ -137,23 +181,23 @@ JS;
 
         return $result;
     }
-    function findAtt($blockName, $html, $parentName = '')
+    private function findAtt($blockName, $html, $parentName = '')
     {
         $patterns = [
-            'text' => '/{{text:\s*(.*?)\s*}}/',
-            'img' => '/{{img:\s*<img src="(.*?)" alt="(.*?)"\s*>\s*}}/',
-            'url' => '/href="{{url:(.*?)}}"/'
+            'text' => '/{{text:\s*((?:.|\n)*?)\s*}}/',
+            'img' => '/{{img:\s*<img alt="(.*?)" src="(.*?)"\s*>\s*}}/',
+            'url' => '/"{{url:(.*?)}}"/'
         ];
-    
+        $hash = "a".substr(md5($blockName), 0, 8);
         $attributes = [];
         $attributeNames = [];
     
         $editHtml = $html;
         $saveHtml = $html;
     
-        $editHtml = preg_replace_callback($patterns['text'], function ($matches) use (&$attributes, &$attributeNames) {
+        $editHtml = preg_replace_callback($patterns['text'], function ($matches) use ($hash, &$attributes, &$attributeNames) {
             static $index = 0;
-            $attributeName = "text_$index";
+            $attributeName = "{$hash}_text_$index";
             $defaultText = esc_html($matches[1]);
             $attributes[$attributeName] = "{ type: 'string', default: '$defaultText' }";
             $attributeNames[] = $attributeName;
@@ -161,17 +205,17 @@ JS;
             return sprintf('<RichText value={attributes.%s} onChange={(value) => setAttributes({ %s: value })} />', $attributeName, $attributeName);
         }, $editHtml);
     
-        $saveHtml = preg_replace_callback($patterns['text'], function ($matches) use (&$attributeNames) {
+        $saveHtml = preg_replace_callback($patterns['text'], function ($matches) use ($hash, &$attributeNames) {
             static $index = 0;
-            $attributeName = "text_$index";
+            $attributeName = "{$hash}_text_$index";
             $index++;
             return sprintf('<RichText.Content value={attributes.%s} />', $attributeName);
         }, $saveHtml);
     
-        $editHtml = preg_replace_callback($patterns['img'], function ($matches) use (&$attributes, &$attributeNames) {
+        $editHtml = preg_replace_callback($patterns['img'], function ($matches) use ($hash, &$attributes, &$attributeNames) {
             static $index = 0;
-            $attributeSrc = "imgSrc_$index";
-            $attributeAlt = "imgAlt_$index";
+            $attributeSrc = "{$hash}_imgSrc_$index";
+            $attributeAlt = "{$hash}_imgAlt_$index";
             $defaultSrc = esc_attr($matches[1]);
             $defaultAlt = esc_attr($matches[2]);
             $attributes[$attributeSrc] = "{ type: 'string', default: '$defaultSrc' }";
@@ -179,44 +223,44 @@ JS;
             $attributeNames[] = $attributeSrc;
             $attributeNames[] = $attributeAlt;
             $index++;
-            return sprintf('<img src={attributes.%s} alt={attributes.%s} />', $attributeSrc, $attributeAlt);
+            return sprintf('<img alt={attributes.%s} src={attributes.%s}/>', $attributeAlt, $attributeSrc);
         }, $editHtml);
     
-        $saveHtml = preg_replace_callback($patterns['img'], function ($matches) use (&$attributeNames) {
+        $saveHtml = preg_replace_callback($patterns['img'], function ($matches) use ($hash, &$attributeNames) {
             static $index = 0;
-            $attributeSrc = "imgSrc_$index";
-            $attributeAlt = "imgAlt_$index";
+            $attributeSrc = "{$hash}_imgSrc_$index";
+            $attributeAlt = "{$hash}_imgAlt_$index";
             $index++;
-            return sprintf('<img src={attributes.%s} alt={attributes.%s} />', $attributeSrc, $attributeAlt);
+            return sprintf('<img src={attributes.%s} alt={attributes.%s} />', $attributeAlt, $attributeSrc);
         }, $saveHtml);
     
-        $editHtml = preg_replace_callback($patterns['url'], function ($matches) use (&$attributes, &$attributeNames) {
+        $editHtml = preg_replace_callback($patterns['url'], function ($matches) use ($hash, &$attributes, &$attributeNames) {
             static $index = 0;
-            $attributeName = "url_$index";
+            $attributeName = "{$hash}_url_$index";
             $defaultUrl = esc_url($matches[1]);
-            $attributes[$attributeName] = "{ type: 'string', default: '$defaultUrl' }";
+            $attributes[$attributeName] = "{ type: 'string', default: '#' }";
             $attributeNames[] = $attributeName;
             $index++;
-            return sprintf('href={attributes.%s}', $attributeName);
+            return sprintf('{attributes.%s}', $attributeName);
         }, $editHtml);
     
-        $saveHtml = preg_replace_callback($patterns['url'], function ($matches) use (&$attributeNames) {
+        $saveHtml = preg_replace_callback($patterns['url'], function ($matches) use ($hash, &$attributeNames) {
             static $index = 0;
-            $attributeName = "url_$index";
+            $attributeName = "{$hash}_url_$index";
             $index++;
-            return sprintf('href={attributes.%s}', $attributeName);
+            return sprintf('{attributes.%s}', $attributeName);
         }, $saveHtml);
         
         $saveHtml = $this->replaceInnerBlocksWithContent($saveHtml);
 
-        $attributesCode = implode(",\n", array_map(function ($key, $value) {
+        $attributesCode = implode(",\n", array_map(function ($key, $value) use ($hash) {
             return "$key: $value";
         }, array_keys($attributes), $attributes));
     
-        $inspectorControls = implode("", array_map(function ($key) {
-            if (strpos($key, 'imgSrc_') === 0) {
+        $inspectorControls = implode("", array_map(function ($key) use ($hash) {
+            if (strpos($key, "{$hash}_imgSrc_") === 0) {
                 return sprintf("<MediaUploadCheck><MediaUpload onSelect={(media) => setAttributes({ %s: media.url })} allowedTypes={['image']} render={({ open }) => (<Button onClick={open} isPrimary>Choose Image</Button>)} /></MediaUploadCheck>", $key);
-            } elseif (strpos($key, 'url_') === 0) {
+            } elseif (strpos($key, "{$hash}_url_") === 0) {
                 return sprintf("<TextControl label='URL' value={attributes.%s} onChange={(value) => setAttributes({ %s: value })} />", $key, $key);
             }
             return '';
@@ -227,7 +271,8 @@ JS;
         } else {
             $inspectorControls = '';
         }
-    
+        $editHtml = str_replace('class="', 'className="', $editHtml);
+        $saveHtml = str_replace('class="', 'className="', $saveHtml);
         $blockCode = sprintf("
             registerBlockType('block-master/%s', {
                 title: '%s',
@@ -262,8 +307,32 @@ JS;
     
         return stripslashes_deep($blockCode);
     }
-}
+    private function findChildID($name)
+    {
+        foreach ($this->blocks as $key => $block) {
+            if ($block['parent'] === $name) {
+                return $key;
+            };
+        };
+        return false; // Agar hech qanday moslik topilmasa, null qaytadi
+    }
+    private function findChilds($name)
+    {
+        while (true) {
+            $childID = $this->findChildID($name);
+            if ($childID !== false) {
+                $child = $this->blocks[$childID];
+                $this->orderedBlocks[] = $child;
+                $this->findChilds($child['name']);
+                // Blokni bo'sh qilish o'rniga, uni o'chirib tashlash uchun unset ishlatamiz
+                unset($this->blocks[$childID]);
+            } else {
+                break; // Agar hech qanday moslik topilmasa, tsikldan chiqish
+            }
+        }
+    }
 
+}
 $html = <<<HTML
 <div class="div">
     <h1>{{text: hayvonlar}}</h1>
@@ -303,12 +372,5 @@ $html = <<<HTML
 </div>
 HTML;
 // $test = new CodeControl("test block",$html);
+// print_r($test->orderedBlocks);
 // print_r($test->resultJS);
-// $htmlContent = '<div>
-//     <InnerBlocks allowedBlocks={["block-master/test-block-0-0"]} template={[["block-master/test-block-0-0", {}]]} />
-//     <InnerBlocks allowedBlocks={["block-master/test-block-1-0"]} template={[["block-master/test-block-1-0", {}]]} />
-// </div>';
-
-// $convertedHtml = $test->replaceInnerBlocksWithContent($htmlContent);
-
-// echo $convertedHtml;

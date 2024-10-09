@@ -6,7 +6,9 @@ function my_custom_plugin_enqueue_scripts($hook) {
 
     // CodeMirror JS
     wp_enqueue_script('codemirror-js', 'https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.12/codemirror.min.js', array(), null, true);
-    wp_enqueue_script('codemirror-mode-js', 'https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.12/mode/javascript/javascript.min.js', array('codemirror-js'), null, true);
+    wp_enqueue_script('babel-js', 'https://unpkg.com/@babel/standalone/babel.min.js', array(), null, true);
+    wp_enqueue_script('bundle-js', 'https://unpkg.com/terser/dist/bundle.min.js', array(), null, true);
+
 
     // Custom JS
 //    wp_enqueue_script('my_custom_plugin_js', plugins_url('/js/my-custom-plugin.js', __FILE__), array('jquery', 'codemirror-js'), null, true);
