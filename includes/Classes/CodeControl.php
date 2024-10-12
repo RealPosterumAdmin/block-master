@@ -185,7 +185,7 @@ registerBlockType('block-master/%s', {
     {
         $patterns = [
             'text' => '/{{text:\s*((?:.|\n)*?)\s*}}/',
-            'img' => '/{{img:\s*<img alt="(.*?)" src="(.*?)"\s*>\s*}}/',
+            'img' => '/{{img:\s*<img\s+(?:src="([^"]*)"|alt="([^"]*)")\s+(?:alt="([^"]*)"|src="([^"]*)")\s*>}}/',
             'url' => '/"{{url:(.*?)}}"/'
         ];
         $hash = "a".substr(md5($blockName), 0, 8);
