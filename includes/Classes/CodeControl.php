@@ -68,61 +68,83 @@ JS;
 
         $this->analiz['blockChild'] = $blockChilds;
 
-        if (empty($blockChilds)) {
-            $blockJS = $this->findAtt($name, $html, $parentName);
-        } else {
-            for ($i = count($blockChilds) - 1; $i >= 0; $i--) {
-                $childStart = $blockChilds[$i]['startPos'];
-                $childEnd = $blockChilds[$i]['endPos'];
-                $childContent = $blockChilds[$i]['content'];
-                $childName = $name . '-' . ($i + 1);
+        if (!empty($blockChilds)) {
+            $previousEnd = 0;
+            $allBlocks = [];
 
-                // Markaziy blokni yaratish
-                $centralBlockName = "{$childName}-central";
-                $innerTag = <<<JS
+            foreach ($blockChilds as $index => $child) {
+                $childStart = $child['startPos'];
+                $childEnd = $child['endPos'];
+                $childContent = $child['content'];
+                $childName = $name . '-' . ($index + 1);
+
+                // Oldingi blokdan joriy blokka qadar bo'lgan kontentni o'rash
+                if ($previousEnd < $childStart) {
+                    $surroundingContent = substr($html, $previousEnd, $childStart - $previousEnd);
+                    $surroundingBlockName = "{$name}-surrounding-{$index}";
+
+                    // Surrounding blockni qo'shish
+                    $allBlocks[] = [
+                        'name' => $surroundingBlockName,
+                        'content' => $surroundingContent
+                    ];
+
+                    $this->blocks[] = [
+                        'name' => $surroundingBlockName,
+                        'parent' => $name,
+                        'code' => $this->findAtt($surroundingBlockName, $surroundingContent, $name)
+                    ];
+                }
+
+                // Ichki blokni qo'shish
+                $allBlocks[] = [
+                    'name' => $childName,
+                    'content' => $childContent
+                ];
+
+                $this->blocks[] = [
+                    'name' => $childName,
+                    'parent' => $name,
+                    'code' => $this->findAtt($childName, $childContent, $name)
+                ];
+
+                // Oldingi tugash pozitsiyasini yangilash
+                $previousEnd = $childEnd;
+            }
+
+            // Oxirgi blokdan oxirgacha bo'lgan kontentni qo'shish
+            if ($previousEnd < strlen($html)) {
+                $remainingContent = substr($html, $previousEnd);
+                $surroundingBlockName = "{$name}-surrounding-end";
+                $allBlocks[] = [
+                    'name' => $surroundingBlockName,
+                    'content' => $remainingContent
+                ];
+
+                $this->blocks[] = [
+                    'name' => $surroundingBlockName,
+                    'parent' => $name,
+                    'code' => $this->findAtt($surroundingBlockName, $remainingContent, $name)
+                ];
+            }
+
+            // Barcha ichki bloklarni yagona InnerBlocks ichida joylashtirish
+            $innerBlocksTemplate = implode(", ", array_map(function ($block) {
+                return "['block-master/{$block['name']}', {}]";
+            }, $allBlocks));
+
+            $innerTag = <<<JS
 <InnerBlocks
-    allowedBlocks={['block-master/{$centralBlockName}']}
-    template={[['block-master/{$centralBlockName}', {}]]}
-    templateLock="all"
+    allowedBlocks={['block-master/{$name}-central']}
+    template={[{$innerBlocksTemplate}]}
 />
 JS;
 
-                // Markaziy blokni ro'yxatdan o'tkazish
-                $centralBlockJS = sprintf("
-registerBlockType('block-master/%s', {
-    title: '%s',
-    category: 'block-master',
-    parent: ['block-master/{$name}'],
-    attributes: {},
-    edit: ({ attributes, setAttributes }) => {
-        return (
-               <InnerBlocks
-                   allowedBlocks={['block-master/{$childName}']}
-                   template={[['block-master/{$childName}', {}],]}
-               />
-        );
-    },
-    save: () => {
-        return (
-                <InnerBlocks.Content />
-        );
-    }
-});", strtolower($centralBlockName), ucfirst($centralBlockName));
-                $this->blocks[] = [
-                    'name' => $centralBlockName,
-                    'parent' => $name,
-                    'code' => $centralBlockJS
-                ];
-
-                // HTML ni markaziy blok bilan almashtirish
-                $html = substr_replace($html, $innerTag, $childStart, $childEnd - $childStart);
-
-                // Ichki bloklar uchun qayta chaqirish
-                $this->createBlockData($childName, $childContent, $centralBlockName);
-            }
-
+            $blockJS = $this->findAtt($name, $innerTag, $parentName);
+        } else {
             $blockJS = $this->findAtt($name, $html, $parentName);
         }
+
         $this->blocks[] = [
             'name' => $name,
             'parent' => $parentName,
@@ -334,43 +356,66 @@ registerBlockType('block-master/%s', {
 
 }
 $html = <<<HTML
-<div class="div">
-    <h1>{{text: hayvonlar}}</h1>
-    <a href="{{url:test.php}}" > some tag </a>
-    {{InnerBlock}}
-    <div class="card">
-        <h4>{{text: yagear }}</h4>
-        {{img: <img src="/sdasd/sd/ad/" alt="rasm-uchun-text">}}
-        <div class="descriptions">
-            {{text: asdjlkajdlkjslf kfjslkmflskf slfks ekcs}}
-        </div><ul>
-        {{InnerBlock}}
-            <li>{{text: 123}}</li>
-        {{/InnerBlock}}
-        </ul>
-    </div>
-    <div class="ds">
-        <span>{{text: dlkjslf kfjslkmflskf slfks ekcs}}</span>
-    </div>
-    {{/InnerBlock}}
-    {{InnerBlock}}
-    <div class="card">
-        <h4>{{text: yagear }}</h4>
-        {{img: <img src="/sdasd/sd/ad/" alt="rasm-uchun-text">}}
-        <div class="descriptions">
-            {{text: asdjlkajdlkjslf kfjslkmflskf slfks ekcs}}
-        </div><ul>
-        {{InnerBlock}}
-            <li>{{text: 123}}</li>
-        {{/InnerBlock}}
-        </ul>
-    </div>
-    <div class="ds">
-        <span>{{text: dlkjslf kfjslkmflskf slfks ekcs}}</span>
-    </div>
-    {{/InnerBlock}}
-</div>
+<section class="page__services mlrp-b0101">
+                <div class="services">
+                    <div class="services__body">
+                        <div class="services__item el-item-1">
+                            <div class="services__column">
+                                <div class="services__title"><h1 class="services__text t-h1">{{text: Студия графического&nbsp;дизайна и&nbsp;веб&nbsp;-&nbsp;разработки }}</h1>
+                                    <div class="services__teammates">
+                                        {{InnerBlock}}
+                                            <div class="services__image">
+                                                <picture>
+                                                    {{img: <img alt="фото" src="./img/teammates/team-1.png">}}
+                                                </picture>
+                                            </div>
+                                        {{/InnerBlock}}
+                                    </div>
+                                    <button class="services__button button" type="submit"><span>Оставить заявку</span>
+                                        <div class="services__icon icon"><i class="icon-arrow-right _icon"></i></div>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="services__item el-item">
+                            <div class="card">
+                                <div class="card__header"><h3>Мы на связи</h3>
+                                    <div class="card__icons"><a class="card__icon icon" href="{{url:}}" target="_blank"><i
+                                            class="icon-telegram-fly _icon"></i></a><a class="card__icon icon" href="{{url:}}"
+                                                                                       target="_blank"> <i
+                                            class="icon-whatsapp _icon"></i></a></div>
+                                </div>
+                            </div>
+                            <a class="card" href="{{url:}}">
+                                <div class="card__header"><h3>{{text:Графический дизайн}}</h3>
+                                    <div class="card__icon icon"><i class="icon-arrow-up _icon"></i></div>
+                                </div>
+                                <div class="card__content">
+                                    <ul class="card__list">
+                                        {{InnerBlock}}
+                                        <li class="card__item">{{text:Логотип}}</li>
+                                        {{/InnerBlock}}
+                                    </ul>
+                                </div>
+                            </a></div>
+                        {{InnerBlock}}
+                        <div class="services__item el-item"><a class="card" href="{{url:}}">
+                            <div class="card__header"><h3>{{text:Веб-дизайн}}</h3>
+                                <div class="card__icon icon"><i class="icon-arrow-up _icon"></i></div>
+                            </div>
+                            <div class="card__content">
+                                <ul class="card__list">
+                                    {{InnerBlock}}
+                                    <li class="card__item">{{text:Дизайн сайта}}</li>
+                                    {{/InnerBlock}}
+                                </ul>
+                            </div>
+                        </a></div>
+                        {{/InnerBlock}}
+                    </div>
+                </div>
+            </section>
 HTML;
-// $test = new CodeControl("test block",$html);
+ $test = new CodeControl("test block",$html);
 // print_r($test->orderedBlocks);
-// print_r($test->resultJS);
+ print_r($test->resultJS);
