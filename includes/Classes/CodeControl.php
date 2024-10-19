@@ -11,7 +11,6 @@ require_once dirname(__DIR__, 5) . '/wp-load.php';
 class CodeControl
 {
     public $resultJS;
-    public $analiz=[];
     public $blocks=[];
     public $orderedBlocks=[];
     public function __construct($blockName,$html)
@@ -32,7 +31,7 @@ const fetchOptions = async () => {
         const postOptions = posts.map((post) => ({
             label: `Post: \${post.title.rendered}`,
             value: post.link,
-        }));
+        }));  
 
         const categoryOptions = categories.map((category) => ({
             label: `Category: \${category.name}`,
@@ -57,16 +56,13 @@ JS;
         $this->orderedBlocks[] = $parentBlock;
         unset($this->blocks[$blocksCount-1]);
         $this->findChilds($parentBlock['name']);
-        foreach ($this->orderedBlocks as $block){
-            $this->resultJS .= $block['code'];
-        }
+//        foreach ($this->orderedBlocks as $block){
+//            $this->resultJS .= $block['code'];
+//        }
     }
 
     private function createBlockData($name, $html, $parentName = '') {
-        $this->analiz['blockName'] = $name;
         $blockChilds = $this->findInnerBlock($html);
-        $this->analiz['blockChild'] = $blockChilds;
-
         if (empty($blockChilds)) {
             $blockJS = $this->findAtt($name, $html, $parentName);
         } else {
@@ -82,8 +78,23 @@ JS;
 
                 // Markaziy blokni ro'yxatdan o'tkazish
                 $centralBlockName = "{$childName}-central";
-                $centralBlockJS = sprintf(
-                    "registerBlockType('block-master/%s', { title: '%s', category: 'block-master', parent: ['block-master/{$name}'], attributes: {}, edit: ({ attributes, setAttributes }) => { return ( <InnerBlocks allowedBlocks={['block-master/{$childName}']} template={[['block-master/{$childName}', {}]]} /> ); }, save: () => { return ( <InnerBlocks.Content /> ); } });",
+                $centralBlockJS = sprintf("
+registerBlockType('block-master/%s', { 
+    title: '%s', category: 'block-master', 
+    parent: ['block-master/{$name}'], 
+    attributes: {}, 
+    edit: ({ attributes, setAttributes }) => { 
+        return ( 
+            <InnerBlocks 
+            allowedBlocks={['block-master/{$childName}']} 
+            template={[['block-master/{$childName}', {}]]} 
+            /> 
+        ); 
+    }, 
+    save: () => { 
+        return ( <InnerBlocks.Content /> ); 
+    } 
+});",
                     strtolower($centralBlockName),
                     ucfirst($centralBlockName)
                 );
@@ -92,6 +103,7 @@ JS;
                     'parent' => $name,
                     'code' => $centralBlockJS
                 ];
+                $this->resultJS .= $centralBlockJS;
 
                 // Ichki bloklar uchun qayta chaqirish
                 $this->createBlockData($childName, $childContent, $centralBlockName);
@@ -102,20 +114,25 @@ JS;
 
                 // Agar bu oxirgi blok bo'lmasa, bloklar o'rtasida yangi blok yaratish
                 if ($i < count($blockChilds) - 1) {
-                    $betweenBlockName = "not-using-{$parentName}";
-                    $betweenBlockJS = $this->findAtt($betweenBlockName, '', $parentName); // Bo'sh kontent bilan
+                    // Ikkita ichki blok o'rtasidagi HTML-ni olish
+                    $betweenStart = $blockChilds[$i]['endPos'];
+                    $nextChildStart = $blockChilds[$i + 1]['startPos'];
+                    $betweenContent = substr($html, $betweenStart, $nextChildStart - $betweenStart);
+                    $betweenBlockName = "between-{$name}";
+                    $betweenBlockJS = $this->findAtt($betweenBlockName, $betweenContent, $name); // O'rtasi uchun HTML kontent
                     $this->blocks[] = [
                         'name' => $betweenBlockName,
                         'parent' => $parentName,
                         'code' => $betweenBlockJS
                     ];
+                    $this->resultJS .= $betweenBlockJS;
                     $innerBlocksTemplate[] = ['block-master/' . $betweenBlockName, []]; // O'rtadagi blokni qo'shish
                 }
             }
 
             // HTML ni yangilash va innerTag ni yaratish
             $innerTag = <<<JS
-<InnerBlocks allowedBlocks={['block-master/{$childName}']} template={%s} templateLock="all" />
+'}</RawHTML><InnerBlocks allowedBlocks={['block-master/{$childName}']} template={%s} templateLock="all" /><RawHTML>{'
 JS;
 
             // Template ichiga barcha yaratilgan bloklarni qo'shish
@@ -132,6 +149,7 @@ JS;
             'parent' => $parentName,
             'code' => $blockJS
         ];
+        $this->resultJS .= $blockJS;
     }
     private function findInnerBlock($html)
     {
@@ -187,7 +205,6 @@ JS;
     }
     private function findAtt($blockName, $html, $parentName = '')
     {
-//        $html = htmlspecialchars($html);
         $patterns = [
             'text' => '/{{text:\s*((?:.|\n)*?)\s*}}/',
             'img' => '/{{img:\s*<img alt="(.*?)" src="(.*?)"\s*>\s*}}/',
@@ -196,9 +213,9 @@ JS;
         $hash = "a".substr(md5($blockName), 0, 8);
         $attributes = [];
         $attributeNames = [];
-    
-        $editHtml = $html;
-        $saveHtml = $html;
+
+//        $html = str_replace('class="', 'className="', $html);
+        $editHtml = $saveHtml = $html;
     
         $editHtml = preg_replace_callback($patterns['text'], function ($matches) use ($hash, &$attributes, &$attributeNames) {
             static $index = 0;
@@ -207,14 +224,14 @@ JS;
             $attributes[$attributeName] = "{ type: 'string', default: '$defaultText' }";
             $attributeNames[] = $attributeName;
             $index++;
-            return sprintf('<RichText value={attributes.%s} onChange={(value) => setAttributes({ %s: value })} />', $attributeName, $attributeName);
+            return sprintf("'}</RawHTML><RichText value={attributes.%s} onChange={(value) => setAttributes({ %s: value })} /><RawHTML>{'", $attributeName, $attributeName);
         }, $editHtml);
     
         $saveHtml = preg_replace_callback($patterns['text'], function ($matches) use ($hash, &$attributeNames) {
             static $index = 0;
             $attributeName = "{$hash}_text_$index";
             $index++;
-            return sprintf('<RichText.Content value={attributes.%s} />', $attributeName);
+            return sprintf("'}</RawHTML><RichText.Content value={attributes.%s} /><RawHTML>{'", $attributeName);
         }, $saveHtml);
     
         $editHtml = preg_replace_callback($patterns['img'], function ($matches) use ($hash, &$attributes, &$attributeNames) {
@@ -228,7 +245,7 @@ JS;
             $attributeNames[] = $attributeSrc;
             $attributeNames[] = $attributeAlt;
             $index++;
-            return sprintf('<img alt={attributes.%s} src={attributes.%s}/>', $attributeAlt, $attributeSrc);
+            return sprintf("'}</RawHTML><img alt={attributes.%s} src={attributes.%s}/><RawHTML>{'", $attributeAlt, $attributeSrc);
         }, $editHtml);
     
         $saveHtml = preg_replace_callback($patterns['img'], function ($matches) use ($hash, &$attributeNames) {
@@ -236,7 +253,7 @@ JS;
             $attributeSrc = "{$hash}_imgSrc_$index";
             $attributeAlt = "{$hash}_imgAlt_$index";
             $index++;
-            return sprintf('<img src={attributes.%s} alt={attributes.%s} />', $attributeAlt, $attributeSrc);
+            return sprintf("'}</RawHTML><img src={attributes.%s} alt={attributes.%s} /><RawHTML>{'", $attributeAlt, $attributeSrc);
         }, $saveHtml);
     
         $editHtml = preg_replace_callback($patterns['url'], function ($matches) use ($hash, &$attributes, &$attributeNames) {
@@ -246,14 +263,14 @@ JS;
             $attributes[$attributeName] = "{ type: 'string', default: '#' }";
             $attributeNames[] = $attributeName;
             $index++;
-            return sprintf('{attributes.%s}', $attributeName);
+            return sprintf("'}</RawHTML>\"{attributes.%s}\"<RawHTML>{'", $attributeName);
         }, $editHtml);
     
         $saveHtml = preg_replace_callback($patterns['url'], function ($matches) use ($hash, &$attributeNames) {
             static $index = 0;
             $attributeName = "{$hash}_url_$index";
             $index++;
-            return sprintf('{attributes.%s}', $attributeName);
+            return sprintf("'}</RawHTML>\"{attributes.%s}\"<RawHTML>{'", $attributeName);
         }, $saveHtml);
         
         $saveHtml = $this->replaceInnerBlocksWithContent($saveHtml);
@@ -276,37 +293,37 @@ JS;
         } else {
             $inspectorControls = '';
         }
-        $editHtml = str_replace('class="', 'className="', $editHtml);
-        $saveHtml = str_replace('class="', 'className="', $saveHtml);
-        $blockCode = sprintf(
-            " registerBlockType('block-master/%s', { 
-        title: '%s', 
-        category: 'block-master', 
-        %s 
-        attributes: { %s }, 
-        edit: ({ attributes, setAttributes }) => { 
-            return ( 
-                <RawHTML> 
-                    {%s} 
+        $blockTitle = ucfirst($blockName);
+        $blockName = strtolower($blockName);
+        $blockParent = $parentName ? "parent: ['block-master/{$parentName}']," : '';
+        $editHtml = preg_replace('/\s+/', ' ', trim($editHtml));
+        $saveHtml = preg_replace('/\s+/', ' ', trim($saveHtml));
+        $blockCode =
+"\nregisterBlockType('block-master/{$blockName}', { 
+    title: '{$blockTitle}', 
+    category: 'block-master', 
+    {$blockParent}
+    attributes: { {$attributesCode} }, 
+    edit: ({ attributes, setAttributes }) => { 
+        return ( 
+            <>
+                {$inspectorControls}
+                <RawHTML>
+                    {'{$editHtml}'} 
+                </RawHTML>
+            </> 
+        ); 
+    }, 
+    save: ({ attributes }) => { 
+        return (
+            <>
+                <RawHTML>
+                    {'{$saveHtml}'} 
                 </RawHTML> 
-            ); 
-        }, 
-        save: ({ attributes }) => { 
-            return ( 
-                <RawHTML> 
-                    {%s} 
-                </RawHTML> 
-            ); 
-        } 
-    }); ",
-            strtolower($blockName),
-            ucfirst($blockName),
-            $parentName ? "parent: ['block-master/{$parentName}']," : '',
-            $attributesCode,
-            $inspectorControls, // HTML kodini qochirish
-            $editHtml, // HTML kodini qochirish
-            $saveHtml // HTML kodini qochirish
+            </>
         );
+    }
+    })";
     
         return stripslashes_deep($blockCode);
     }
@@ -398,5 +415,6 @@ $html = <<<HTML
             </section>
 HTML;
 // $test = new CodeControl("test block",$html);
+// var_dump($test->blocks);
 // print_r($test->orderedBlocks);
-// print_r($test->resultJS);
+// echo($test->resultJS);
