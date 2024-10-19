@@ -20,7 +20,7 @@ class CodeControl
 const { registerBlockType } = wp.blocks;
 const { useBlockProps, RichText, MediaUpload, MediaUploadCheck, InspectorControls, InnerBlocks } = wp.blockEditor;
 const { PanelBody, Button, SelectControl, TextControl } = wp.components;
-const { useState, useEffect } = wp.element;
+const { useState, useEffect, RawHTML } = wp.element;
 const apiFetch = wp.apiFetch;
 
 
@@ -65,86 +65,68 @@ JS;
     private function createBlockData($name, $html, $parentName = '') {
         $this->analiz['blockName'] = $name;
         $blockChilds = $this->findInnerBlock($html);
-
         $this->analiz['blockChild'] = $blockChilds;
 
-        if (!empty($blockChilds)) {
-            $previousEnd = 0;
-            $allBlocks = [];
+        if (empty($blockChilds)) {
+            $blockJS = $this->findAtt($name, $html, $parentName);
+        } else {
+            $childBlocks = []; // Yaratilgan bloklarni saqlash uchun massiv
+            $innerBlocksTemplate = []; // InnerBlocks uchun shablon
 
-            foreach ($blockChilds as $index => $child) {
-                $childStart = $child['startPos'];
-                $childEnd = $child['endPos'];
-                $childContent = $child['content'];
-                $childName = $name . '-' . ($index + 1);
+            // Har bir ichki blok uchun
+            for ($i = 0; $i < count($blockChilds); $i++) {
+                $childStart = $blockChilds[$i]['startPos'];
+                $childEnd = $blockChilds[$i]['endPos'];
+                $childContent = $blockChilds[$i]['content'];
+                $childName = $name . '-' . ($i + 1);
 
-                // Oldingi blokdan joriy blokka qadar bo'lgan kontentni o'rash
-                if ($previousEnd < $childStart) {
-                    $surroundingContent = substr($html, $previousEnd, $childStart - $previousEnd);
-                    $surroundingBlockName = "{$name}-surrounding-{$index}";
+                // Markaziy blokni ro'yxatdan o'tkazish
+                $centralBlockName = "{$childName}-central";
+                $centralBlockJS = sprintf(
+                    "registerBlockType('block-master/%s', { title: '%s', category: 'block-master', parent: ['block-master/{$name}'], attributes: {}, edit: ({ attributes, setAttributes }) => { return ( <InnerBlocks allowedBlocks={['block-master/{$childName}']} template={[['block-master/{$childName}', {}]]} /> ); }, save: () => { return ( <InnerBlocks.Content /> ); } });",
+                    strtolower($centralBlockName),
+                    ucfirst($centralBlockName)
+                );
+                $this->blocks[] = [
+                    'name' => $centralBlockName,
+                    'parent' => $name,
+                    'code' => $centralBlockJS
+                ];
 
-                    // Surrounding blockni qo'shish
-                    $allBlocks[] = [
-                        'name' => $surroundingBlockName,
-                        'content' => $surroundingContent
-                    ];
+                // Ichki bloklar uchun qayta chaqirish
+                $this->createBlockData($childName, $childContent, $centralBlockName);
 
+                // Yaratilgan bloklarni saqlash
+                $childBlocks[] = $centralBlockName;
+                $innerBlocksTemplate[] = ['block-master/' . $childName, []];
+
+                // Agar bu oxirgi blok bo'lmasa, bloklar o'rtasida yangi blok yaratish
+                if ($i < count($blockChilds) - 1) {
+                    $betweenBlockName = "not-using-{$parentName}";
+                    $betweenBlockJS = $this->findAtt($betweenBlockName, '', $parentName); // Bo'sh kontent bilan
                     $this->blocks[] = [
-                        'name' => $surroundingBlockName,
-                        'parent' => $name,
-                        'code' => $this->findAtt($surroundingBlockName, $surroundingContent, $name)
+                        'name' => $betweenBlockName,
+                        'parent' => $parentName,
+                        'code' => $betweenBlockJS
                     ];
+                    $innerBlocksTemplate[] = ['block-master/' . $betweenBlockName, []]; // O'rtadagi blokni qo'shish
                 }
-
-                // Ichki blokni qo'shish
-                $allBlocks[] = [
-                    'name' => $childName,
-                    'content' => $childContent
-                ];
-
-                $this->blocks[] = [
-                    'name' => $childName,
-                    'parent' => $name,
-                    'code' => $this->findAtt($childName, $childContent, $name)
-                ];
-
-                // Oldingi tugash pozitsiyasini yangilash
-                $previousEnd = $childEnd;
             }
 
-            // Oxirgi blokdan oxirgacha bo'lgan kontentni qo'shish
-            if ($previousEnd < strlen($html)) {
-                $remainingContent = substr($html, $previousEnd);
-                $surroundingBlockName = "{$name}-surrounding-end";
-                $allBlocks[] = [
-                    'name' => $surroundingBlockName,
-                    'content' => $remainingContent
-                ];
-
-                $this->blocks[] = [
-                    'name' => $surroundingBlockName,
-                    'parent' => $name,
-                    'code' => $this->findAtt($surroundingBlockName, $remainingContent, $name)
-                ];
-            }
-
-            // Barcha ichki bloklarni yagona InnerBlocks ichida joylashtirish
-            $innerBlocksTemplate = implode(", ", array_map(function ($block) {
-                return "['block-master/{$block['name']}', {}]";
-            }, $allBlocks));
-
+            // HTML ni yangilash va innerTag ni yaratish
             $innerTag = <<<JS
-<InnerBlocks
-    allowedBlocks={['block-master/{$name}-central']}
-    template={[{$innerBlocksTemplate}]}
-/>
+<InnerBlocks allowedBlocks={['block-master/{$childName}']} template={%s} templateLock="all" />
 JS;
 
-            $blockJS = $this->findAtt($name, $innerTag, $parentName);
-        } else {
+            // Template ichiga barcha yaratilgan bloklarni qo'shish
+            $innerTag = sprintf($innerTag, json_encode($innerBlocksTemplate));
+
+            // Eng birinchi blok startdan eng oxirgi blok endgacha bo'lgan qismni inner block bilan yaratish
+            $html = substr_replace($html, $innerTag, $blockChilds[0]['startPos'], $blockChilds[count($blockChilds) - 1]['endPos'] - $blockChilds[0]['startPos']);
             $blockJS = $this->findAtt($name, $html, $parentName);
         }
 
+        // Asosiy blokni qo'shish
         $this->blocks[] = [
             'name' => $name,
             'parent' => $parentName,
@@ -205,6 +187,7 @@ JS;
     }
     private function findAtt($blockName, $html, $parentName = '')
     {
+//        $html = htmlspecialchars($html);
         $patterns = [
             'text' => '/{{text:\s*((?:.|\n)*?)\s*}}/',
             'img' => '/{{img:\s*<img alt="(.*?)" src="(.*?)"\s*>\s*}}/',
@@ -295,37 +278,35 @@ JS;
         }
         $editHtml = str_replace('class="', 'className="', $editHtml);
         $saveHtml = str_replace('class="', 'className="', $saveHtml);
-        $blockCode = sprintf("
-            registerBlockType('block-master/%s', {
-                title: '%s',
-                category: 'block-master',
-                %s
-                attributes: {
-                    %s
-                },
-                edit: ({ attributes, setAttributes }) => {
-                    return (
-                        <>
-                            %s
-                            %s
-                        </>
-                    );
-                },
-                save: ({ attributes }) => {
-                    return (
-                        <>
-                            %s
-                        </>
-                    );
-                }
-            });
-        ", strtolower($blockName), 
-        ucfirst($blockName), 
-        $parentName ? "parent: ['block-master/{$parentName}']," : '', 
-        $attributesCode, 
-        $inspectorControls, 
-        $editHtml, 
-        $saveHtml);
+        $blockCode = sprintf(
+            " registerBlockType('block-master/%s', { 
+        title: '%s', 
+        category: 'block-master', 
+        %s 
+        attributes: { %s }, 
+        edit: ({ attributes, setAttributes }) => { 
+            return ( 
+                <RawHTML> 
+                    {%s} 
+                </RawHTML> 
+            ); 
+        }, 
+        save: ({ attributes }) => { 
+            return ( 
+                <RawHTML> 
+                    {%s} 
+                </RawHTML> 
+            ); 
+        } 
+    }); ",
+            strtolower($blockName),
+            ucfirst($blockName),
+            $parentName ? "parent: ['block-master/{$parentName}']," : '',
+            $attributesCode,
+            $inspectorControls, // HTML kodini qochirish
+            $editHtml, // HTML kodini qochirish
+            $saveHtml // HTML kodini qochirish
+        );
     
         return stripslashes_deep($blockCode);
     }
@@ -416,6 +397,6 @@ $html = <<<HTML
                 </div>
             </section>
 HTML;
- $test = new CodeControl("test block",$html);
+// $test = new CodeControl("test block",$html);
 // print_r($test->orderedBlocks);
- print_r($test->resultJS);
+// print_r($test->resultJS);

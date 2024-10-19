@@ -65,7 +65,7 @@ function saveBlock() {
                 });
 
             } else {
-                console.error('Error:', response.data.message);
+                console.error('Error:', response);
             }
         },
         error: function(xhr, status, error) {
